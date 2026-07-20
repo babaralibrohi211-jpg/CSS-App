@@ -72,7 +72,7 @@ export default function QuizResultPage({ params }: { params: Promise<{ quizId: s
       </Card>
 
       <div className="flex flex-col sm:flex-row gap-3 justify-center">
-        <Link href={`/quizzes/${quizId}/attempt`}>
+        <Link href={`/quizzes/${quizId}/attempt?mode=review`}>
           <Button variant="outline" className="w-full sm:w-auto">Review Answers</Button>
         </Link>
         <Link href={`/quizzes/${quizId}/attempt`}>

@@ -7,7 +7,7 @@ import { mentorQuickActions, trialDaysLeft } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/firebase";
-import { doc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
+import { doc, getDoc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
 
 interface Message {
   id: string;
@@ -27,6 +27,7 @@ export default function MentorPage() {
   ]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Load this user's onboarding data for personalization
@@ -45,6 +46,34 @@ export default function MentorPage() {
       }
     });
     return unsub;
+  }, [user]);
+
+  // Load saved conversation history from Firestore on mount, so a page
+  // refresh doesn't lose the visible conversation (it was already being
+  // saved — this is what actually reads it back in).
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "aiMentorChats", user.uid));
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data.messages && data.messages.length > 0) {
+            setMessages(
+              data.messages.map(
+                (m: { role: "user" | "assistant"; content: string }, i: number) => ({
+                  id: `saved-${i}`,
+                  role: m.role,
+                  content: m.content,
+                })
+              )
+            );
+          }
+        }
+      } finally {
+        setHistoryLoaded(true);
+      }
+    })();
   }, [user]);
 
   useEffect(() => {
@@ -137,20 +166,26 @@ export default function MentorPage() {
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-6 py-5 space-y-4">
-        {messages.map((m) => (
-          <div key={m.id} className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}>
-            <div
-              className={cn(
-                "max-w-[80%] md:max-w-[65%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap",
-                m.role === "user"
-                  ? "bg-primary text-on-primary rounded-br-sm"
-                  : "bg-surface-container-low text-on-surface rounded-bl-sm"
-              )}
-            >
-              {m.content || (streaming && m.role === "assistant" ? "..." : "")}
-            </div>
+        {!historyLoaded ? (
+          <div className="flex justify-center pt-8">
+            <div className="h-6 w-6 rounded-full border-2 border-primary border-t-transparent animate-spin" />
           </div>
-        ))}
+        ) : (
+          messages.map((m) => (
+            <div key={m.id} className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}>
+              <div
+                className={cn(
+                  "max-w-[80%] md:max-w-[65%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap",
+                  m.role === "user"
+                    ? "bg-primary text-on-primary rounded-br-sm"
+                    : "bg-surface-container-low text-on-surface rounded-bl-sm"
+                )}
+              >
+                {m.content || (streaming && m.role === "assistant" ? "..." : "")}
+              </div>
+            </div>
+          ))
+        )}
       </div>
 
       {/* Quick actions */}

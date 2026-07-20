@@ -98,6 +98,42 @@ export const subjects = [
     totalMarks: 100,
     questions: 8,
   },
+  {
+    slug: "political-science",
+    name: "Political Science",
+    group: "Optional",
+    icon: "gavel",
+    progress: 0,
+    totalMarks: 100,
+    questions: 8,
+  },
+  {
+    slug: "public-administration",
+    name: "Public Administration",
+    group: "Optional",
+    icon: "corporate_fare",
+    progress: 0,
+    totalMarks: 100,
+    questions: 8,
+  },
+  {
+    slug: "sociology",
+    name: "Sociology",
+    group: "Optional",
+    icon: "groups",
+    progress: 0,
+    totalMarks: 100,
+    questions: 8,
+  },
+  {
+    slug: "muslim-law-jurisprudence",
+    name: "Muslim Law & Jurisprudence",
+    group: "Optional",
+    icon: "balance",
+    progress: 0,
+    totalMarks: 100,
+    questions: 8,
+  },
 ];
 
 export const continueLearning = {
