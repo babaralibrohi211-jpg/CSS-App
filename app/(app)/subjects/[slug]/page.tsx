@@ -9,7 +9,7 @@ import { Icon } from "@/components/ui/icon";
 import { getSubjectDetail } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 import { db } from "@/lib/firebase";
-import { collection, query, where, getDocs } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
 
 const TABS = ["Overview", "Syllabus", "Notes", "Books", "Past Papers", "Quiz", "AI Tutor"] as const;
 type Tab = (typeof TABS)[number];
@@ -35,36 +35,53 @@ interface RealPastPaper {
   fileUrl: string;
 }
 
+interface RealSyllabus {
+  totalMarks: number;
+  paperPattern: { part: string; marks: number }[];
+  recommendedTime: string;
+  topics: string[];
+  syllabusSource?: string;
+}
+
 export default function SubjectDetailPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = use(params);
   const subject = getSubjectDetail(slug);
   const [tab, setTab] = useState<Tab>("Overview");
   const [bookmarked, setBookmarked] = useState(false);
-  const [syllabus, setSyllabus] = useState(subject?.syllabus ?? []);
 
   const [books, setBooks] = useState<RealBook[]>([]);
   const [notes, setNotes] = useState<RealNote[]>([]);
   const [pastPapers, setPastPapers] = useState<RealPastPaper[]>([]);
+  const [realSyllabus, setRealSyllabus] = useState<RealSyllabus | null>(null);
+  const [checkedTopics, setCheckedTopics] = useState<Set<number>>(new Set());
   const [contentLoading, setContentLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
-        const [booksSnap, notesSnap, papersSnap] = await Promise.all([
+        const [booksSnap, notesSnap, papersSnap, subjectDoc] = await Promise.all([
           getDocs(query(collection(db, "books"), where("subjectId", "==", slug))),
           getDocs(query(collection(db, "notes"), where("subjectId", "==", slug))),
           getDocs(query(collection(db, "pastPapers"), where("subjectId", "==", slug))),
+          getDoc(doc(db, "subjects", slug)),
         ]);
 
-        setBooks(
-          booksSnap.docs.map((d) => ({ id: d.id, ...d.data() } as RealBook))
-        );
-        setNotes(
-          notesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as RealNote))
-        );
-        setPastPapers(
-          papersSnap.docs.map((d) => ({ id: d.id, ...d.data() } as RealPastPaper))
-        );
+        setBooks(booksSnap.docs.map((d) => ({ id: d.id, ...d.data() } as RealBook)));
+        setNotes(notesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as RealNote)));
+        setPastPapers(papersSnap.docs.map((d) => ({ id: d.id, ...d.data() } as RealPastPaper)));
+
+        if (subjectDoc.exists()) {
+          const data = subjectDoc.data();
+          if (data.topics && data.topics.length > 0) {
+            setRealSyllabus({
+              totalMarks: data.totalMarks,
+              paperPattern: data.paperPattern || [],
+              recommendedTime: data.recommendedTime,
+              topics: data.topics,
+              syllabusSource: data.syllabusSource,
+            });
+          }
+        }
       } catch (err) {
         console.error("Failed to load subject content:", err);
       } finally {
@@ -75,8 +92,13 @@ export default function SubjectDetailPage({ params }: { params: Promise<{ slug: 
 
   if (!subject) return notFound();
 
-  function toggleTopic(id: number) {
-    setSyllabus((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+  function toggleRealTopic(index: number) {
+    setCheckedTopics((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
   }
 
   const booksByLevel = {
@@ -97,6 +119,16 @@ export default function SubjectDetailPage({ params }: { params: Promise<{ slug: 
   const sortedYears = Object.keys(papersByYear)
     .map(Number)
     .sort((a, b) => b - a);
+
+  // Prefer real FPSC data; fall back to placeholder for subjects not yet covered
+  const displayStats = realSyllabus
+    ? {
+        totalMarks: realSyllabus.totalMarks,
+        questions: realSyllabus.topics.length,
+        split: subject.stats.split,
+        recommendedTime: realSyllabus.recommendedTime,
+      }
+    : subject.stats;
 
   return (
     <div className="space-y-6">
@@ -146,34 +178,91 @@ export default function SubjectDetailPage({ params }: { params: Promise<{ slug: 
       {tab === "Overview" && (
         <div className="space-y-5">
           <p className="text-sm text-on-surface-variant leading-relaxed max-w-2xl">{subject.description}</p>
+
+          {realSyllabus && (
+            <div className="flex items-center gap-2 text-xs text-secondary bg-secondary-container/15 rounded-lg px-3 py-2 w-fit">
+              <Icon name="verified" filled className="text-[16px]" />
+              Official FPSC syllabus data
+            </div>
+          )}
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatCard label="Total Marks" value={String(subject.stats.totalMarks)} icon="workspace_premium" />
-            <StatCard label="Questions" value={String(subject.stats.questions)} icon="quiz" />
-            <StatCard label="Category" value={subject.stats.split} icon="category" />
-            <StatCard label="Recommended Time" value={subject.stats.recommendedTime} icon="schedule" />
+            <StatCard label="Total Marks" value={String(displayStats.totalMarks)} icon="workspace_premium" />
+            <StatCard label="Topics/Sections" value={String(displayStats.questions)} icon="quiz" />
+            <StatCard label="Category" value={displayStats.split} icon="category" />
+            <StatCard label="Recommended Time" value={displayStats.recommendedTime} icon="schedule" />
           </div>
+
+          {realSyllabus && realSyllabus.paperPattern.length > 0 && (
+            <div>
+              <h3 className="font-semibold text-on-surface mb-3">Paper Pattern</h3>
+              <Card className="divide-y divide-outline-variant/30">
+                {realSyllabus.paperPattern.map((p) => (
+                  <div key={p.part} className="flex items-center justify-between px-5 py-3">
+                    <span className="text-sm text-on-surface">{p.part}</span>
+                    <span className="text-sm font-medium text-on-surface-variant">{p.marks} marks</span>
+                  </div>
+                ))}
+              </Card>
+            </div>
+          )}
         </div>
       )}
 
       {tab === "Syllabus" && (
-        <Card className="divide-y divide-outline-variant/30">
-          {syllabus.map((topic) => (
-            <button
-              key={topic.id}
-              onClick={() => toggleTopic(topic.id)}
-              className="w-full flex items-center gap-3 px-5 py-4 text-left"
-            >
-              <Icon
-                name={topic.done ? "check_circle" : "radio_button_unchecked"}
-                filled={topic.done}
-                className={topic.done ? "text-primary" : "text-on-surface-variant"}
-              />
-              <span className={cn("text-sm", topic.done ? "text-on-surface-variant line-through" : "text-on-surface")}>
-                {topic.title}
-              </span>
-            </button>
-          ))}
-        </Card>
+        <div>
+          {contentLoading ? (
+            <LoadingRow />
+          ) : realSyllabus ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-xs text-secondary bg-secondary-container/15 rounded-lg px-3 py-2 w-fit">
+                <Icon name="verified" filled className="text-[16px]" />
+                Official FPSC syllabus — {realSyllabus.topics.length} topics
+              </div>
+              <Card className="divide-y divide-outline-variant/30">
+                {realSyllabus.topics.map((topic, i) => (
+                  <button
+                    key={i}
+                    onClick={() => toggleRealTopic(i)}
+                    className="w-full flex items-start gap-3 px-5 py-4 text-left"
+                  >
+                    <Icon
+                      name={checkedTopics.has(i) ? "check_circle" : "radio_button_unchecked"}
+                      filled={checkedTopics.has(i)}
+                      className={cn(
+                        "mt-0.5 shrink-0",
+                        checkedTopics.has(i) ? "text-primary" : "text-on-surface-variant"
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "text-sm leading-relaxed",
+                        checkedTopics.has(i) ? "text-on-surface-variant line-through" : "text-on-surface"
+                      )}
+                    >
+                      {topic}
+                    </span>
+                  </button>
+                ))}
+              </Card>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-xs text-tertiary bg-tertiary-container/15 rounded-lg px-3 py-2 w-fit">
+                <Icon name="info" className="text-[16px]" />
+                Placeholder syllabus — official topics not yet added for this subject
+              </div>
+              <Card className="divide-y divide-outline-variant/30">
+                {subject.syllabus.map((topic) => (
+                  <div key={topic.id} className="w-full flex items-center gap-3 px-5 py-4">
+                    <Icon name="radio_button_unchecked" className="text-on-surface-variant" />
+                    <span className="text-sm text-on-surface">{topic.title}</span>
+                  </div>
+                ))}
+              </Card>
+            </div>
+          )}
+        </div>
       )}
 
       {tab === "Notes" && (
