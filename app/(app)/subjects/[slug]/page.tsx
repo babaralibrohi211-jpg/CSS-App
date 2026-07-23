@@ -378,8 +378,7 @@ export default function SubjectDetailPage({ params }: { params: Promise<{ slug: 
       {tab === "Quiz" && (
         <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
           {subject.quizzes.map((q) => (
-            <Link key={q.title} href="/quizzes">
-              <Card className="p-5 hover:bg-surface-container-low transition-colors">
+                  <Link key={q.title} href={`/quizzes/subject-${slug}/attempt?subject=${slug}`}>              <Card className="p-5 hover:bg-surface-container-low transition-colors">
                 <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-secondary-container text-on-secondary-container mb-3">
                   <Icon name="quiz" filled className="text-[18px]" />
                 </div>

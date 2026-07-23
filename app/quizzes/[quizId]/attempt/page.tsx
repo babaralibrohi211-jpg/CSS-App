@@ -4,31 +4,130 @@ import { use, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Icon } from "@/components/ui/icon";
 import { ProgressBar, Card } from "@/components/ui/card";
-import { quizQuestions } from "@/lib/mock-data";
+import { quizQuestions as mockQuestions } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
+import { db } from "@/lib/firebase";
+import { collection, getDocs, query, where } from "firebase/firestore";
+
+interface QuizQuestion {
+  id: number | string;
+  question: string;
+  options: string[];
+  correctIndex: number;
+}
+
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Deterministic PRNG so the "weekly"/"monthly" quiz is identical for every
+// user during that period, but genuinely different once the seed changes.
+function mulberry32(seed: number) {
+  return function () {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function seededShuffle<T>(arr: T[], seed: number): T[] {
+  const rand = mulberry32(seed);
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function getISOWeek(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+}
 
 export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: string }> }) {
   const { quizId } = use(params);
   const router = useRouter();
   const searchParams = useSearchParams();
   const isReview = searchParams.get("mode") === "review";
+  const subjectParam = searchParams.get("subject");
+  const typeParam = searchParams.get("type"); // "weekly" | "monthly" | "mockexam"
+
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>(mockQuestions);
+  const [loadingQuestions, setLoadingQuestions] = useState(
+    (!!subjectParam || !!typeParam) && !isReview
+  );
 
   const [current, setCurrent] = useState(0);
-  const [answers, setAnswers] = useState<Record<number, number>>({});
-  const [flagged, setFlagged] = useState<Set<number>>(new Set());
+  const [answers, setAnswers] = useState<Record<number | string, number>>({});
+  const [flagged, setFlagged] = useState<Set<number | string>>(new Set());
   const [secondsLeft, setSecondsLeft] = useState(15 * 60);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
 
-  const question = quizQuestions[current];
   const total = quizQuestions.length;
+  const question = quizQuestions[current];
 
-  // Guard against any leftover scroll position from the previous page
+  // Fetch real questions: per-subject (shuffled fresh each attempt), or
+  // weekly/monthly (deterministic rotation across all subjects), or
+  // a full randomized mock exam pulling the entire real question bank.
+  useEffect(() => {
+    if (isReview) return;
+    if (!subjectParam && !typeParam) return;
+
+    (async () => {
+      try {
+        let pool: QuizQuestion[] = [];
+
+        if (subjectParam) {
+          const snap = await getDocs(
+            query(collection(db, "questionBank"), where("subjectId", "==", subjectParam))
+          );
+          pool = snap.docs.map((d) => {
+            const data = d.data();
+            return { id: d.id, question: data.question, options: data.options, correctIndex: data.correctIndex };
+          });
+          pool = shuffle(pool); // fresh order every attempt
+        } else {
+          const snap = await getDocs(collection(db, "questionBank"));
+          pool = snap.docs.map((d) => {
+            const data = d.data();
+            return { id: d.id, question: data.question, options: data.options, correctIndex: data.correctIndex };
+          });
+
+          if (typeParam === "weekly") {
+            const seed = new Date().getFullYear() * 100 + getISOWeek(new Date());
+            pool = seededShuffle(pool, seed).slice(0, 10);
+          } else if (typeParam === "monthly") {
+            const now = new Date();
+            const seed = now.getFullYear() * 100 + now.getMonth();
+            pool = seededShuffle(pool, seed).slice(0, 20);
+          } else if (typeParam === "mockexam") {
+            pool = shuffle(pool); // different every attempt, not date-locked
+          }
+        }
+
+        if (pool.length > 0) setQuizQuestions(pool);
+      } catch (err) {
+        console.error("Failed to load real questions, using default set:", err);
+      } finally {
+        setLoadingQuestions(false);
+      }
+    })();
+  }, [subjectParam, typeParam, isReview]);
+
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
 
-  // In review mode, load the saved answers/flags from the last attempt
-  // instead of starting a fresh quiz.
   useEffect(() => {
     if (!isReview) return;
     const raw = sessionStorage.getItem(`quiz-result-${quizId}`);
@@ -41,13 +140,13 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
   }, [isReview, quizId]);
 
   useEffect(() => {
-    if (isReview) return; // no timer needed when just reviewing
+    if (isReview || loadingQuestions) return;
     const t = setInterval(() => setSecondsLeft((s) => Math.max(0, s - 1)), 1000);
     return () => clearInterval(t);
-  }, [isReview]);
+  }, [isReview, loadingQuestions]);
 
   useEffect(() => {
-    if (isReview) return; // nothing to lose in review mode, no warning needed
+    if (isReview) return;
     function handler(e: BeforeUnloadEvent) {
       e.preventDefault();
     }
@@ -56,13 +155,21 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
   }, [isReview]);
 
   useEffect(() => {
-    if (isReview) return;
+    if (isReview || loadingQuestions) return;
     if (secondsLeft === 0) finish();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [secondsLeft, isReview]);
+  }, [secondsLeft, isReview, loadingQuestions]);
+
+  if (loadingQuestions) {
+    return (
+      <div className="flex justify-center py-20">
+        <div className="h-8 w-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+      </div>
+    );
+  }
 
   function selectOption(index: number) {
-    if (isReview) return; // read-only
+    if (isReview) return;
     setAnswers((prev) => ({ ...prev, [question.id]: index }));
   }
 
@@ -191,7 +298,7 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
 
             return (
               <button
-                key={opt}
+                key={i}
                 onClick={() => selectOption(i)}
                 disabled={isReview}
                 className={cn(
