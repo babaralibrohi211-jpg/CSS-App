@@ -376,18 +376,22 @@ export default function SubjectDetailPage({ params }: { params: Promise<{ slug: 
       )}
 
       {tab === "Quiz" && (
-        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
-          {subject.quizzes.map((q) => (
-                  <Link key={q.title} href={`/quizzes/subject-${slug}/attempt?subject=${slug}`}>              <Card className="p-5 hover:bg-surface-container-low transition-colors">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-secondary-container text-on-secondary-container mb-3">
-                  <Icon name="quiz" filled className="text-[18px]" />
-                </div>
-                <h3 className="font-medium text-sm text-on-surface">{q.title}</h3>
-                <p className="mt-1 text-xs text-on-surface-variant">{q.questions} questions · {q.minutes} min</p>
-              </Card>
-            </Link>
-          ))}
-        </div>
+        <Card className="p-6 flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-secondary-container text-on-secondary-container">
+              <Icon name="quiz" filled />
+            </div>
+            <div>
+              <p className="font-medium text-on-surface text-sm">Practice quizzes for {subject.name}</p>
+              <p className="text-xs text-on-surface-variant">
+                Fresh AI-generated questions every attempt, grounded in the real syllabus.
+              </p>
+            </div>
+          </div>
+          <Link href={`/quizzes/subject-${slug}/attempt?subject=${slug}`}>
+            <Button>Attempt Quiz</Button>
+          </Link>
+        </Card>
       )}
 
       {tab === "AI Tutor" && (
