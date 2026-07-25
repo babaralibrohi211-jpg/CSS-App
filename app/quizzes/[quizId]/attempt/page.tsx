@@ -8,6 +8,7 @@ import { quizQuestions as mockQuestions } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 import { db } from "@/lib/firebase";
 import { collection, getDocs, query, where } from "firebase/firestore";
+import { useAuth } from "@/lib/auth-context";
 
 interface QuizQuestion {
   id: number | string;
@@ -25,8 +26,6 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-// Deterministic PRNG so the "weekly"/"monthly" quiz is identical for every
-// user during that period, but genuinely different once the seed changes.
 function mulberry32(seed: number) {
   return function () {
     seed |= 0;
@@ -58,14 +57,14 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
   const { quizId } = use(params);
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { user } = useAuth();
   const isReview = searchParams.get("mode") === "review";
   const subjectParam = searchParams.get("subject");
-  const typeParam = searchParams.get("type"); // "weekly" | "monthly" | "mockexam"
+  const typeParam = searchParams.get("type");
 
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>(mockQuestions);
-  const [loadingQuestions, setLoadingQuestions] = useState(
-    (!!subjectParam || !!typeParam) && !isReview
-  );
+  const [loadingQuestions, setLoadingQuestions] = useState(true);
+  const [loadingLabel, setLoadingLabel] = useState("Loading questions...");
 
   const [current, setCurrent] = useState(0);
   const [answers, setAnswers] = useState<Record<number | string, number>>({});
@@ -76,68 +75,93 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
   const total = quizQuestions.length;
   const question = quizQuestions[current];
 
-  // Fetch real questions: per-subject (shuffled fresh each attempt), or
-  // weekly/monthly (deterministic rotation across all subjects), or
-  // a full randomized mock exam pulling the entire real question bank.
   useEffect(() => {
-    if (isReview) return;
-    if (!subjectParam && !typeParam) return;
-
     (async () => {
-      try {
-        let pool: QuizQuestion[] = [];
+      // REVIEW MODE: load the exact snapshot of questions + answers from
+      // this specific attempt — never regenerate, since subject quizzes
+      // produce different questions every time they're generated.
+      if (isReview) {
+        const raw = sessionStorage.getItem(`quiz-result-${quizId}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.questions && parsed.questions.length > 0) {
+            setQuizQuestions(parsed.questions);
+          }
+          setAnswers(parsed.answers || {});
+          setFlagged(new Set(parsed.flagged || []));
+        }
+        setLoadingQuestions(false);
+        return;
+      }
 
-        if (subjectParam) {
+      if (!subjectParam && !typeParam) {
+        setLoadingQuestions(false);
+        return;
+      }
+
+      try {
+        // SUBJECT QUIZ: generate genuinely new questions live, every attempt.
+        if (subjectParam && user) {
+          setLoadingLabel("Generating fresh questions with AI...");
+          const idToken = await user.getIdToken();
+          const res = await fetch("/api/generate-quiz", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+            body: JSON.stringify({ subjectId: subjectParam, count: 8 }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.questions && data.questions.length > 0) {
+              setQuizQuestions(data.questions);
+              setLoadingQuestions(false);
+              return;
+            }
+          }
+          // Fallback: live generation failed — use whatever's already in the bank.
           const snap = await getDocs(
             query(collection(db, "questionBank"), where("subjectId", "==", subjectParam))
           );
-          pool = snap.docs.map((d) => {
-            const data = d.data();
-            return { id: d.id, question: data.question, options: data.options, correctIndex: data.correctIndex };
-          });
-          pool = shuffle(pool); // fresh order every attempt
-        } else {
-          const snap = await getDocs(collection(db, "questionBank"));
-          pool = snap.docs.map((d) => {
-            const data = d.data();
-            return { id: d.id, question: data.question, options: data.options, correctIndex: data.correctIndex };
-          });
+          const pool = shuffle(
+            snap.docs.map((d) => {
+              const data = d.data();
+              return { id: d.id, question: data.question, options: data.options, correctIndex: data.correctIndex };
+            })
+          );
+          if (pool.length > 0) setQuizQuestions(pool);
+          setLoadingQuestions(false);
+          return;
+        }
 
-          if (typeParam === "weekly") {
-            const seed = new Date().getFullYear() * 100 + getISOWeek(new Date());
-            pool = seededShuffle(pool, seed).slice(0, 10);
-          } else if (typeParam === "monthly") {
-            const now = new Date();
-            const seed = now.getFullYear() * 100 + now.getMonth();
-            pool = seededShuffle(pool, seed).slice(0, 20);
-          } else if (typeParam === "mockexam") {
-            pool = shuffle(pool); // different every attempt, not date-locked
-          }
+        // WEEKLY / MONTHLY / MOCK EXAM: pull from the growing real bank.
+        const snap = await getDocs(collection(db, "questionBank"));
+        let pool: QuizQuestion[] = snap.docs.map((d) => {
+          const data = d.data();
+          return { id: d.id, question: data.question, options: data.options, correctIndex: data.correctIndex };
+        });
+
+        if (typeParam === "weekly") {
+          const seed = new Date().getFullYear() * 100 + getISOWeek(new Date());
+          pool = seededShuffle(pool, seed).slice(0, 10);
+        } else if (typeParam === "monthly") {
+          const now = new Date();
+          const seed = now.getFullYear() * 100 + now.getMonth();
+          pool = seededShuffle(pool, seed).slice(0, 20);
+        } else if (typeParam === "mockexam") {
+          pool = shuffle(pool);
         }
 
         if (pool.length > 0) setQuizQuestions(pool);
       } catch (err) {
-        console.error("Failed to load real questions, using default set:", err);
+        console.error("Failed to load questions, using default set:", err);
       } finally {
         setLoadingQuestions(false);
       }
     })();
-  }, [subjectParam, typeParam, isReview]);
+  }, [subjectParam, typeParam, isReview, user, quizId]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
-
-  useEffect(() => {
-    if (!isReview) return;
-    const raw = sessionStorage.getItem(`quiz-result-${quizId}`);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      setAnswers(parsed.answers || {});
-      setFlagged(new Set(parsed.flagged || []));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isReview, quizId]);
 
   useEffect(() => {
     if (isReview || loadingQuestions) return;
@@ -162,8 +186,9 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
 
   if (loadingQuestions) {
     return (
-      <div className="flex justify-center py-20">
+      <div className="flex flex-col items-center justify-center py-24 gap-4">
         <div className="h-8 w-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+        <p className="text-sm text-on-surface-variant">{loadingLabel}</p>
       </div>
     );
   }
@@ -199,9 +224,20 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
 
   function finish() {
     const correct = quizQuestions.filter((q) => answers[q.id] === q.correctIndex).length;
+    // Save the FULL question snapshot (not just answers) so Review Mode can
+    // show exactly what was asked, even though live generation would
+    // otherwise produce different questions on a fresh fetch.
     sessionStorage.setItem(
       `quiz-result-${quizId}`,
-      JSON.stringify({ correct, total, answers, flagged: Array.from(flagged) })
+      JSON.stringify({
+        correct,
+        total,
+        questions: quizQuestions,
+        answers,
+        flagged: Array.from(flagged),
+        subjectParam,
+        typeParam,
+      })
     );
     router.push(`/quizzes/${quizId}/result`);
   }

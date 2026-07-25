@@ -9,12 +9,22 @@ import { Icon } from "@/components/ui/icon";
 export default function QuizResultPage({ params }: { params: Promise<{ quizId: string }> }) {
   const { quizId } = use(params);
   const [result, setResult] = useState<{ correct: number; total: number } | null>(null);
+  const [retakeHref, setRetakeHref] = useState(`/quizzes/${quizId}/attempt`);
 
   useEffect(() => {
     const raw = sessionStorage.getItem(`quiz-result-${quizId}`);
     if (raw) {
       const parsed = JSON.parse(raw);
       setResult({ correct: parsed.correct, total: parsed.total });
+
+      // Rebuild the correct retake URL using whichever subject/type was
+      // actually used for this attempt, so retaking regenerates properly
+      // instead of falling back to the default mock set.
+      const qs = new URLSearchParams();
+      if (parsed.subjectParam) qs.set("subject", parsed.subjectParam);
+      if (parsed.typeParam) qs.set("type", parsed.typeParam);
+      const query = qs.toString();
+      setRetakeHref(`/quizzes/${quizId}/attempt${query ? `?${query}` : ""}`);
     } else {
       setResult({ correct: 3, total: 5 });
     }
@@ -75,7 +85,7 @@ export default function QuizResultPage({ params }: { params: Promise<{ quizId: s
         <Link href={`/quizzes/${quizId}/attempt?mode=review`}>
           <Button variant="outline" className="w-full sm:w-auto">Review Answers</Button>
         </Link>
-        <Link href={`/quizzes/${quizId}/attempt`}>
+        <Link href={retakeHref}>
           <Button className="w-full sm:w-auto">Retake Quiz</Button>
         </Link>
       </div>
