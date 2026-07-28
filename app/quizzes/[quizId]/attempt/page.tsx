@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { db } from "@/lib/firebase";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { useAuth } from "@/lib/auth-context";
+import { useCooldown } from "@/lib/use-cooldown";
 
 interface QuizQuestion {
   id: number | string;
@@ -72,6 +73,8 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
   const [secondsLeft, setSecondsLeft] = useState(15 * 60);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
 
+  const cooldown = useCooldown(`quiz-${subjectParam}`, 30);
+
   const total = quizQuestions.length;
   const question = quizQuestions[current];
 
@@ -90,6 +93,11 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
           setAnswers(parsed.answers || {});
           setFlagged(new Set(parsed.flagged || []));
         }
+        setLoadingQuestions(false);
+        return;
+      }
+      if (subjectParam && cooldown.active) {
+        setLoadingLabel("");
         setLoadingQuestions(false);
         return;
       }
@@ -113,6 +121,7 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
             const data = await res.json();
             if (data.questions && data.questions.length > 0) {
               setQuizQuestions(data.questions);
+              cooldown.trigger();
               setLoadingQuestions(false);
               return;
             }
@@ -157,6 +166,7 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
         setLoadingQuestions(false);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subjectParam, typeParam, isReview, user, quizId]);
 
   useEffect(() => {
@@ -222,11 +232,11 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
     }
   }
 
-  function finish() {
+  async function finish() {
     const correct = quizQuestions.filter((q) => answers[q.id] === q.correctIndex).length;
-    // Save the FULL question snapshot (not just answers) so Review Mode can
-    // show exactly what was asked, even though live generation would
-    // otherwise produce different questions on a fresh fetch.
+    const accuracy = Math.round((correct / total) * 100);
+
+    // Save for the immediate Result/Review page (unchanged behavior)
     sessionStorage.setItem(
       `quiz-result-${quizId}`,
       JSON.stringify({
@@ -239,6 +249,27 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
         typeParam,
       })
     );
+
+    // NEW: persist this attempt permanently to Firestore, so Progress and
+    // Planner have real history to work with (not just this browser session).
+    if (user) {
+      try {
+        const { addDoc, collection, serverTimestamp } = await import("firebase/firestore");
+        await addDoc(collection(db, "quizAttempts"), {
+          uid: user.uid,
+          subjectId: subjectParam || null,
+          type: typeParam || "subject",
+          score: correct,
+          total,
+          accuracy,
+          createdAt: serverTimestamp(),
+        });
+      } catch (err) {
+        console.error("Failed to save quiz attempt:", err);
+        // Don't block the user from seeing their result even if this fails
+      }
+    }
+
     router.push(`/quizzes/${quizId}/result`);
   }
 

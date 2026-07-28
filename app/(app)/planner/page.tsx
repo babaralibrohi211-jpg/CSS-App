@@ -1,11 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, Badge } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
-import { plannerTasks } from "@/lib/mock-data";
+import { subjects } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
+import { db } from "@/lib/firebase";
+import { collection, getDocs, query, where, doc, getDoc, setDoc } from "firebase/firestore";
+import { useAuth } from "@/lib/auth-context";
+import { useCooldown } from "@/lib/use-cooldown";
 
 const TABS = [
   { key: "daily", label: "Daily" },
@@ -15,19 +19,115 @@ const TABS = [
 
 type TabKey = (typeof TABS)[number]["key"];
 
-export default function PlannerPage() {
-  const [tab, setTab] = useState<TabKey>("daily");
-  const [adjustOpen, setAdjustOpen] = useState(false);
-  const [tasks, setTasks] = useState(plannerTasks);
+interface PlanTask {
+  id: string;
+  label: string;
+  subject: string;
+  time: string;
+  done: boolean;
+}
 
-  function toggleTask(id: number) {
-    setTasks((prev) => ({
-      ...prev,
-      [tab]: prev[tab].map((t) => (t.id === id ? { ...t, done: !t.done } : t)),
-    }));
+interface Plan {
+  dailyTasks: PlanTask[];
+  weeklyTasks: PlanTask[];
+  monthlyTasks: PlanTask[];
+}
+
+export default function PlannerPage() {
+  const { user } = useAuth();
+  const [tab, setTab] = useState<TabKey>("daily");
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const planCooldown = useCooldown("plan", 30);
+
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const planDoc = await getDoc(doc(db, "studyPlans", user.uid));
+        if (planDoc.exists()) {
+          const data = planDoc.data();
+          setPlan({
+            dailyTasks: data.dailyTasks || [],
+            weeklyTasks: data.weeklyTasks || [],
+            monthlyTasks: data.monthlyTasks || [],
+          });
+        }
+      } catch (err) {
+        console.error("Failed to load plan:", err);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [user]);
+
+  async function handleGeneratePlan() {
+    if (planCooldown.active) {
+      setError(`Please wait ${planCooldown.remaining}s before generating again.`);
+      return;
+    }
+    if (!user) return;
+    setGenerating(true);
+    setError(null);
+    try {
+      // Build real performance data from this user's actual quiz attempts
+      const snap = await getDocs(query(collection(db, "quizAttempts"), where("uid", "==", user.uid)));
+      const attempts = snap.docs.map((d) => d.data());
+
+      const performance = subjects.map((s) => {
+        const subjectAttempts = attempts.filter((a) => a.subjectId === s.slug);
+        const avgAccuracy =
+          subjectAttempts.length > 0
+            ? Math.round(subjectAttempts.reduce((sum, a) => sum + a.accuracy, 0) / subjectAttempts.length)
+            : null;
+        return { subjectId: s.slug, subjectName: s.name, avgAccuracy };
+      });
+
+      const idToken = await user.getIdToken();
+      const res = await fetch("/api/generate-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({ performance }),
+      });
+      if (!res.ok) throw new Error("Generation failed");
+      const data = await res.json();
+      setPlan({ dailyTasks: data.daily, weeklyTasks: data.weekly, monthlyTasks: data.monthly });
+      planCooldown.trigger();
+    } catch (err) {
+      console.error(err);
+      setError("Could not generate a plan right now. Please try again.");
+    } finally {
+      setGenerating(false);
+    }
   }
 
-  const list = tasks[tab];
+  async function toggleTask(taskId: string) {
+    if (!plan || !user) return;
+    const key = tab === "daily" ? "dailyTasks" : tab === "weekly" ? "weeklyTasks" : "monthlyTasks";
+    const updated = {
+      ...plan,
+      [key]: plan[key].map((t) => (t.id === taskId ? { ...t, done: !t.done } : t)),
+    };
+    setPlan(updated);
+    try {
+      await setDoc(doc(db, "studyPlans", user.uid), { uid: user.uid, ...updated, updatedAt: new Date() }, { merge: true });
+    } catch (err) {
+      console.error("Failed to save task update:", err);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-24">
+        <div className="h-8 w-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+      </div>
+    );
+  }
+
+  const list = plan ? (tab === "daily" ? plan.dailyTasks : tab === "weekly" ? plan.weeklyTasks : plan.monthlyTasks) : [];
 
   return (
     <div className="space-y-5">
@@ -36,74 +136,81 @@ export default function PlannerPage() {
           <h1 className="text-2xl md:text-3xl font-bold text-on-surface">Study Planner</h1>
           <p className="text-xs text-on-surface-variant mt-1 flex items-center gap-1.5">
             <Icon name="auto_awesome" className="text-[16px] text-primary" />
-            Generated by AI based on your progress
+            Generated by AI based on your real quiz performance
           </p>
         </div>
-        <Button variant="outline" onClick={() => setAdjustOpen(true)}>
-          <Icon name="tune" className="text-[18px]" />
-          Adjust Plan
+        <Button variant="outline" onClick={handleGeneratePlan} disabled={generating}>
+          {generating ? (
+            <>
+              <span className="h-4 w-4 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+              Generating...
+            </>
+          ) : (
+            <>
+              <Icon name="auto_awesome" className="text-[18px]" />
+              {plan ? "Regenerate Plan" : "Generate My Plan"}
+            </>
+          )}
         </Button>
       </div>
 
-      <div className="inline-flex rounded-full border border-outline-variant p-1 bg-surface-container-low">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={cn(
-              "px-4 py-1.5 rounded-full text-sm font-medium transition-colors",
-              tab === t.key ? "bg-primary text-on-primary" : "text-on-surface-variant"
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {error && <p className="text-sm text-error">{error}</p>}
 
-      <Card className="divide-y divide-outline-variant/30">
-        {list.map((task) => (
-          <div key={task.id} className="flex items-center gap-3 px-5 py-4">
-            <button onClick={() => toggleTask(task.id)}>
-              <Icon
-                name={task.done ? "check_circle" : "radio_button_unchecked"}
-                filled={task.done}
-                className={task.done ? "text-primary" : "text-on-surface-variant"}
-              />
-            </button>
-            <div className="flex-1 min-w-0">
-              <p className={cn("text-sm font-medium", task.done ? "line-through text-on-surface-variant" : "text-on-surface")}>
-                {task.label}
-              </p>
-              <div className="flex items-center gap-2 mt-1">
-                <Badge tone="secondary">{task.subject}</Badge>
-                <span className="text-xs text-on-surface-variant flex items-center gap-1">
-                  <Icon name="schedule" className="text-[14px]" />
-                  {task.time}
-                </span>
-              </div>
-            </div>
-          </div>
-        ))}
-      </Card>
-
-      {adjustOpen && (
-        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setAdjustOpen(false)} />
-          <div className="relative w-full md:max-w-md bg-surface-container-lowest rounded-t-2xl md:rounded-2xl p-6 shadow-2xl">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-semibold text-on-surface">Adjust Plan</h2>
-              <button onClick={() => setAdjustOpen(false)} className="h-8 w-8 flex items-center justify-center rounded-full hover:bg-surface-container">
-                <Icon name="close" />
+      {!plan ? (
+        <Card className="p-10 flex flex-col items-center text-center">
+          <Icon name="calendar_month" className="text-[40px] text-on-surface-variant/40 mb-3" />
+          <p className="text-sm text-on-surface-variant max-w-sm mb-4">
+            No study plan yet. Generate one based on your real quiz performance — it'll prioritize
+            subjects you're weaker in.
+          </p>
+        </Card>
+      ) : (
+        <>
+          <div className="inline-flex rounded-full border border-outline-variant p-1 bg-surface-container-low">
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={cn(
+                  "px-4 py-1.5 rounded-full text-sm font-medium transition-colors",
+                  tab === t.key ? "bg-primary text-on-primary" : "text-on-surface-variant"
+                )}
+              >
+                {t.label}
               </button>
-            </div>
-            <p className="text-sm text-on-surface-variant">
-              Manually editing tasks will be available once the planner is connected to your live study data (Phase 3 — AI Integration).
-            </p>
-            <Button className="w-full mt-6" onClick={() => setAdjustOpen(false)}>
-              Got it
-            </Button>
+            ))}
           </div>
-        </div>
+
+          <Card className="divide-y divide-outline-variant/30">
+            {list.length === 0 ? (
+              <p className="px-5 py-8 text-sm text-on-surface-variant text-center">No tasks in this period.</p>
+            ) : (
+              list.map((task) => (
+                <div key={task.id} className="flex items-center gap-3 px-5 py-4">
+                  <button onClick={() => toggleTask(task.id)}>
+                    <Icon
+                      name={task.done ? "check_circle" : "radio_button_unchecked"}
+                      filled={task.done}
+                      className={task.done ? "text-primary" : "text-on-surface-variant"}
+                    />
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <p className={cn("text-sm font-medium", task.done ? "line-through text-on-surface-variant" : "text-on-surface")}>
+                      {task.label}
+                    </p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Badge tone="secondary">{task.subject}</Badge>
+                      <span className="text-xs text-on-surface-variant flex items-center gap-1">
+                        <Icon name="schedule" className="text-[14px]" />
+                        {task.time}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </Card>
+        </>
       )}
     </div>
   );

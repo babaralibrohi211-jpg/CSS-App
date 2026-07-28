@@ -1,67 +1,119 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Card, Badge } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icon";
-import { bookmarks } from "@/lib/mock-data";
-import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
+import { getUserBookmarks, removeBookmarkById, Bookmark, BookmarkType } from "@/lib/bookmarks";
 
-const TYPES = ["All", "Notes", "Books", "Questions", "AI Responses", "Topics"];
+const FILTERS: { key: BookmarkType | "all"; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "subject", label: "Subjects" },
+  { key: "book", label: "Books" },
+  { key: "note", label: "Notes" },
+  { key: "pastPaper", label: "Past Papers" },
+];
 
 export default function BookmarksPage() {
-  const [filter, setFilter] = useState("All");
-  const [items, setItems] = useState(bookmarks);
+  const { user } = useAuth();
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [filter, setFilter] = useState<BookmarkType | "all">("all");
+  const [loading, setLoading] = useState(true);
 
-  const filtered = filter === "All" ? items : items.filter((b) => b.type === filter);
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const data = await getUserBookmarks(user.uid);
+        setBookmarks(data);
+      } catch (err) {
+        console.error("Failed to load bookmarks:", err);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [user]);
 
-  function remove(id: number) {
-    setItems((prev) => prev.filter((b) => b.id !== id));
+  async function handleRemove(id: string) {
+    setBookmarks((prev) => prev.filter((b) => b.id !== id));
+    try {
+      await removeBookmarkById(id);
+    } catch (err) {
+      console.error("Failed to remove bookmark:", err);
+    }
+  }
+
+  const filtered = filter === "all" ? bookmarks : bookmarks.filter((b) => b.itemType === filter);
+
+  const typeIcon: Record<BookmarkType, string> = {
+    subject: "menu_book",
+    book: "menu_book",
+    note: "description",
+    pastPaper: "history_edu",
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-24">
+        <div className="h-8 w-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div>
         <h1 className="text-2xl md:text-3xl font-bold text-on-surface">Bookmarks</h1>
-        <p className="text-sm text-on-surface-variant mt-1">Everything you've saved for later, in one place.</p>
+        <p className="text-sm text-on-surface-variant mt-1">Subjects, books, and notes you've saved.</p>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {TYPES.map((t) => (
+      <div className="flex gap-2 flex-wrap">
+        {FILTERS.map((f) => (
           <button
-            key={t}
-            onClick={() => setFilter(t)}
-            className={cn(
-              "rounded-full px-3.5 py-1.5 text-sm font-medium border transition-colors",
-              filter === t
-                ? "bg-primary text-on-primary border-primary"
-                : "border-outline-variant text-on-surface-variant hover:bg-surface-container"
-            )}
+            key={f.key}
+            onClick={() => setFilter(f.key)}
+            className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+              filter === f.key
+                ? "bg-primary text-on-primary"
+                : "border border-outline-variant text-on-surface-variant hover:bg-surface-container"
+            }`}
           >
-            {t}
+            {f.label}
           </button>
         ))}
       </div>
 
       {filtered.length === 0 ? (
-        <Card className="p-10 text-center">
-          <Icon name="bookmark_border" className="text-[32px] text-on-surface-variant mb-2" />
-          <p className="text-sm text-on-surface-variant">No bookmarks in this category yet.</p>
+        <Card className="p-10 flex flex-col items-center text-center">
+          <Icon name="bookmark" className="text-[40px] text-on-surface-variant/40 mb-3" />
+          <p className="text-sm text-on-surface-variant">
+            {bookmarks.length === 0
+              ? "No bookmarks yet. Tap the bookmark icon on a subject, book, or note to save it here."
+              : "No bookmarks in this category."}
+          </p>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((b) => (
-            <Card key={b.id} className="p-4 flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <Badge tone="secondary">{b.type}</Badge>
-                <p className="mt-2 text-sm font-medium text-on-surface leading-snug">{b.title}</p>
-                <p className="mt-1 text-xs text-on-surface-variant">{b.subject} · {b.date}</p>
+            <Card key={b.id} className="p-4 flex gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary-container/15 text-primary">
+                <Icon name={typeIcon[b.itemType]} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <Badge tone="secondary">{b.subjectName}</Badge>
+                <Link href={b.linkUrl} target={b.linkUrl.startsWith("http") ? "_blank" : undefined}>
+                  <p className="text-sm font-medium text-on-surface mt-1.5 hover:text-primary line-clamp-2">
+                    {b.title}
+                  </p>
+                </Link>
               </div>
               <button
-                onClick={() => remove(b.id)}
-                className="shrink-0 flex h-8 w-8 items-center justify-center rounded-full text-on-surface-variant hover:bg-surface-container hover:text-error"
+                onClick={() => handleRemove(b.id)}
+                className="h-8 w-8 shrink-0 flex items-center justify-center rounded-full hover:bg-surface-container text-on-surface-variant"
                 aria-label="Remove bookmark"
               >
-                <Icon name="bookmark" filled className="text-[18px]" />
+                <Icon name="close" className="text-[18px]" />
               </button>
             </Card>
           ))}

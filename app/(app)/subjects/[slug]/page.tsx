@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { db } from "@/lib/firebase";
 import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
 import { useAuth } from "@/lib/auth-context";
+import { useCooldown } from "@/lib/use-cooldown";
 
 const TABS = ["Overview", "Syllabus", "Notes", "Books", "Past Papers", "Quiz", "AI Tutor"] as const;
 type Tab = (typeof TABS)[number];
@@ -77,6 +78,8 @@ export default function SubjectDetailPage({ params }: { params: Promise<{ slug: 
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [viewingNote, setViewingNote] = useState<RealNote | null>(null);
 
+  const notesCooldown = useCooldown(`notes-${slug}`, 30);
+
   async function loadContent() {
     try {
       const [booksSnap, notesSnap, papersSnap, subjectDoc] = await Promise.all([
@@ -126,6 +129,10 @@ export default function SubjectDetailPage({ params }: { params: Promise<{ slug: 
   }
 
   async function handleGenerateNotes() {
+    if (notesCooldown.active) {
+      setGenerateError(`Please wait ${notesCooldown.remaining}s before generating again.`);
+      return;
+    }
     if (!topic.trim() || !user) return;
     setGenerating(true);
     setGenerateError(null);
@@ -147,6 +154,7 @@ export default function SubjectDetailPage({ params }: { params: Promise<{ slug: 
         throw new Error(data.error || "Generation failed");
       }
       await loadContent();
+      notesCooldown.trigger();
       setShowGenerateModal(false);
       setTopic("");
       setExtraInstructions("");
