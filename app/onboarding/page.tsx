@@ -6,6 +6,9 @@ import { Icon } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Card, ProgressBar } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
+import { db } from "@/lib/firebase";
+import { doc, setDoc } from "firebase/firestore";
 
 const YEARS = [2026, 2027, 2028, 2029];
 const HOURS = ["1–2 hrs", "3–4 hrs", "5–6 hrs", "7+ hrs"];
@@ -35,6 +38,7 @@ const TOTAL_STEPS = 6;
 
 export default function OnboardingPage() {
   const router = useRouter();
+  const { user } = useAuth();
   const [step, setStep] = useState(1);
   const [year, setYear] = useState<number | null>(null);
   const [hours, setHours] = useState<string | null>(null);
@@ -42,16 +46,43 @@ export default function OnboardingPage() {
   const [covered, setCovered] = useState<string[]>([]);
   const [schedule, setSchedule] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  function next() {
+  async function next() {
     if (step === 5) {
       setStep(6);
       setGenerating(true);
-      setTimeout(() => router.push("/dashboard"), 2200);
+      setSaveError(null);
+
+      if (user) {
+        try {
+          await setDoc(
+            doc(db, "users", user.uid),
+            {
+              onboarding: {
+                completed: true,
+                targetYear: year,
+                dailyHours: hours,
+                level,
+                completedSubjects: covered,
+                schedulePref: schedule,
+              },
+              updatedAt: new Date(),
+            },
+            { merge: true }
+          );
+        } catch (err) {
+          console.error("Failed to save onboarding data:", err);
+          setSaveError("Couldn't save your preferences, but you can continue — you can update these later in Settings.");
+        }
+      }
+
+      setTimeout(() => router.push("/dashboard"), 1800);
       return;
     }
     setStep((s) => Math.min(TOTAL_STEPS, s + 1));
   }
+
   function back() {
     setStep((s) => Math.max(1, s - 1));
   }
@@ -158,8 +189,9 @@ export default function OnboardingPage() {
           {step === 6 && (
             <div className="flex flex-col items-center text-center py-8">
               <div className="h-12 w-12 rounded-full border-4 border-primary-container border-t-primary animate-spin mb-6" />
-              <h2 className="text-lg font-semibold text-on-surface">Generating your personalized roadmap...</h2>
+              <h2 className="text-lg font-semibold text-on-surface">Saving your preferences...</h2>
               <p className="mt-2 text-sm text-on-surface-variant">This usually takes a few seconds.</p>
+              {saveError && <p className="mt-3 text-xs text-error max-w-xs">{saveError}</p>}
             </div>
           )}
 

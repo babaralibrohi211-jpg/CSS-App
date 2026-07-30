@@ -72,6 +72,7 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
   const [flagged, setFlagged] = useState<Set<number | string>>(new Set());
   const [secondsLeft, setSecondsLeft] = useState(15 * 60);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const cooldown = useCooldown(`quiz-${subjectParam}`, 30);
 
@@ -233,6 +234,9 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
   }
 
   async function finish() {
+    if (submitting) return; // prevent duplicate submission from double-clicks
+    setSubmitting(true);
+
     const correct = quizQuestions.filter((q) => answers[q.id] === q.correctIndex).length;
     const accuracy = Math.round((correct / total) * 100);
 
@@ -413,9 +417,10 @@ export default function QuizAttemptPage({ params }: { params: Promise<{ quizId: 
 
         <button
           onClick={next}
-          className="inline-flex items-center gap-2 rounded-full bg-primary text-on-primary px-6 h-11 text-sm font-medium hover:opacity-90"
+          disabled={submitting}
+          className="inline-flex items-center gap-2 rounded-full bg-primary text-on-primary px-6 h-11 text-sm font-medium hover:opacity-90 disabled:opacity-60"
         >
-          {current < total - 1 ? "Next" : isReview ? "Back to Results" : "Finish Quiz"}
+          {submitting ? "Saving..." : current < total - 1 ? "Next" : isReview ? "Back to Results" : "Finish Quiz"}
           <Icon name="arrow_forward" className="text-[18px]" />
         </button>
       </div>
