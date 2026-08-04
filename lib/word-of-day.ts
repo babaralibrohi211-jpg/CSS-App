@@ -5,7 +5,13 @@ import { getFirestore } from "firebase-admin/firestore";
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 function todayKey(): string {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  // Pakistan Standard Time is UTC+5 year-round (no daylight saving).
+  // Using this instead of raw UTC so the word rolls over at actual
+  // midnight in Pakistan, not at 5 AM local time (which is what pure
+  // UTC would give us).
+  const PKT_OFFSET_MS = 5 * 60 * 60 * 1000;
+  const pktNow = new Date(Date.now() + PKT_OFFSET_MS);
+  return pktNow.toISOString().slice(0, 10); // YYYY-MM-DD in PKT
 }
 
 export interface WordOfDay {
