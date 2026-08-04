@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { WordOfDayCard } from "@/components/word-of-day-card";
 import Link from "next/link";
 import { Bar, BarChart, ResponsiveContainer, XAxis, Tooltip } from "recharts";
 import { Card, ProgressRing, Badge } from "@/components/ui/card";
@@ -255,6 +256,8 @@ export default function DashboardPage() {
           </Link>
         </Card>
       </div>
+
+      <WordOfDayCard />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {QUICK_ACCESS.map((q) => (

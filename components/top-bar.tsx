@@ -1,19 +1,40 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/ui/icon";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { CommandPalette } from "@/components/command-palette";
 import { mobileTabNav, primaryNav } from "@/lib/nav";
+import { useAuth } from "@/lib/auth-context";
+import { db } from "@/lib/firebase";
+import { collection, query, where, getDocs } from "firebase/firestore";
 
 export function TopBar() {
+  const { user } = useAuth();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [hasUnread, setHasUnread] = useState(false);
 
   const extraMobileItems = primaryNav.filter(
     (item) => !mobileTabNav.some((m) => m.href === item.href)
   );
+
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const snap = await getDocs(
+          query(collection(db, "notifications"), where("uid", "==", user.uid), where("read", "==", false))
+        );
+        setHasUnread(!snap.empty);
+      } catch (err) {
+        console.error("Failed to check notifications:", err);
+      }
+    })();
+  }, [user]);
+
+  const avatarInitial = (user?.displayName?.[0] || user?.email?.[0] || "?").toUpperCase();
 
   return (
     <>
@@ -44,14 +65,14 @@ export function TopBar() {
             className="flex h-9 w-9 items-center justify-center rounded-full text-on-surface-variant hover:bg-surface-container relative"
           >
             <Icon name="notifications" />
-            <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-error" />
+            {hasUnread && <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-error" />}
           </Link>
           <ThemeToggle />
           <Link
             href="/account/settings"
             className="ml-1 flex h-8 w-8 items-center justify-center rounded-full bg-primary-container text-on-primary-container text-sm font-semibold"
           >
-            B
+            {avatarInitial}
           </Link>
         </div>
       </header>
