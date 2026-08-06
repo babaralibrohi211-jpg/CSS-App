@@ -149,7 +149,7 @@ export default function MentorPage() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-64px-24px)] md:h-[calc(100vh-64px-48px)] -mx-4 md:-mx-6 -mb-24 md:-mb-6">
+    <div className="flex flex-col h-[calc(100dvh-64px-24px)] md:h-[calc(100dvh-64px-48px)] -mx-4 md:-mx-6 mb-0 md:-mb-6">
       {/* Header */}
       <div className="flex items-center justify-between px-4 md:px-6 pb-4 border-b border-outline-variant/40">
         <div className="flex items-center gap-3">
@@ -204,7 +204,7 @@ export default function MentorPage() {
       </div>
 
       {/* Input bar */}
-      <div className="px-4 md:px-6 pt-2 pb-4 border-t border-outline-variant/40">
+      <div className="px-4 md:px-6 pt-2 pb-10 md:pb-4 border-t border-outline-variant/40">
         <div className="flex items-center gap-2 rounded-full border border-outline-variant bg-surface-container-low pl-2 pr-2 h-12">
           <button className="flex h-8 w-8 items-center justify-center rounded-full text-on-surface-variant hover:bg-surface-container shrink-0">
             <Icon name="add" />
