@@ -13,14 +13,16 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
-  sendPasswordResetEmail,
-  sendEmailVerification,
   updateProfile,
   GoogleAuthProvider,
   signInWithPopup,
 } from "firebase/auth";
 import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import {
+  requestVerificationEmail,
+  requestPasswordResetEmail,
+} from "@/lib/authEmailClient";
 
 interface AuthContextValue {
   user: User | null;
@@ -34,6 +36,13 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+/** Error carrying a user-facing message from the custom email API. */
+function emailApiError(message: string): Error & { code: string } {
+  const err = new Error(message) as Error & { code: string };
+  err.code = "custom/email-api";
+  return err;
+}
 
 async function ensureUserDocument(user: User, name?: string) {
   const userRef = doc(db, "users", user.uid);
@@ -79,7 +88,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const credential = await createUserWithEmailAndPassword(auth, email, password);
     await updateProfile(credential.user, { displayName: name });
     await ensureUserDocument(credential.user, name);
-    await sendEmailVerification(credential.user);
+
+    // Branded verification email via our API (replaces sendEmailVerification).
+    // The account is already created at this point, so a send failure is
+    // reported as a recoverable message — the user can use "Resend".
+    const result = await requestVerificationEmail();
+    if (!result.ok) {
+      throw emailApiError(
+        "Your account was created, but we couldn't send the verification email. " +
+          "Please use \u201cResend verification email\u201d in a moment."
+      );
+    }
   }
 
   async function logIn(email: string, password: string) {
@@ -97,12 +116,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function resetPassword(email: string) {
-    await sendPasswordResetEmail(auth, email);
+    // Branded reset email via our API (replaces firebase/auth sendPasswordResetEmail).
+    const result = await requestPasswordResetEmail(email);
+    if (!result.ok) throw emailApiError(result.message);
   }
 
   async function resendVerificationEmail() {
     if (auth.currentUser) {
-      await sendEmailVerification(auth.currentUser);
+      const result = await requestVerificationEmail();
+      if (!result.ok) throw emailApiError(result.message);
     }
   }
 
@@ -123,6 +145,12 @@ export function useAuth() {
 
 export function friendlyAuthError(error: unknown): string {
   const code = (error as { code?: string })?.code ?? "";
+
+  // Messages from our custom email API are already user-friendly.
+  if (code === "custom/email-api") {
+    return (error as Error).message;
+  }
+
   switch (code) {
     case "auth/email-already-in-use":
       return "An account with this email already exists. Try signing in instead.";
